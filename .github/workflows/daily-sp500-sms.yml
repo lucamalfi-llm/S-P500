@@ -1,1 +1,35 @@
+name: Daily S&P 500 SMS Update
 
+# Runs automatically on a schedule, and can also be triggered manually
+# from the GitHub Actions tab ("Run workflow" button).
+on:
+  schedule:
+    # Cron is in UTC. 21:30 UTC = 4:30pm US Eastern during Daylight Time
+    # (EDT, roughly Mar-Nov), and 5:30pm during Standard Time (EST, winter).
+    # Runs Mon-Fri only (market close). Adjust the hour if you want a
+    # different local time.
+    - cron: "30 21 * * 1-5"
+  workflow_dispatch: {}   # lets you click "Run workflow" manually to test
+
+jobs:
+  send-update:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repo
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install dependencies
+        run: pip install twilio yfinance
+
+      - name: Run S&P 500 SMS script
+        env:
+          TWILIO_ACCOUNT_SID: ${{ secrets.TWILIO_ACCOUNT_SID }}
+          TWILIO_AUTH_TOKEN: ${{ secrets.TWILIO_AUTH_TOKEN }}
+          TWILIO_SMS_FROM: ${{ secrets.TWILIO_SMS_FROM }}
+          MY_SMS_TO: ${{ secrets.MY_SMS_TO }}
+        run: python3 sp500_sms.py
