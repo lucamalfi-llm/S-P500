@@ -1,47 +1,50 @@
 """
-Daily S&P 500 + Fed Rate text updater - FREE VERSION (email-to-SMS gateway).
+Daily Market Update text - FREE VERSION (email-to-SMS gateway).
 
 WHAT THIS DOES
 --------------
-Fetches:
-  1. The latest S&P 500 (^GSPC) price + daily change, from Yahoo Finance.
-  2. The latest Effective Federal Funds Rate, from FRED (Federal Reserve
-     Economic Data - the Fed's own free public database).
-Then sends both as a single text message via Verizon's email-to-SMS
-gateway. No Twilio, no fees.
+Fetches and texts a daily market summary:
+  1. S&P 500 (^GSPC) - price + daily change
+  2. Nasdaq Composite (^IXIC) - price + daily change
+  3. Dow Jones (^DJI) - price + daily change
+  4. 10-Year Treasury Yield (^TNX)
+  5. Fed Funds Rate (from FRED)
+  6. Top 3 gaining and top 3 losing S&P 500 sectors (via sector ETFs)
 
-NEW SETUP STEP: FRED API KEY (free, instant)
-----------------------------------------------
-1. Go to https://fred.stlouisfed.org/docs/api/api_key.html
-2. Click "Request API Key" - sign up for a free FRED account if you don't
-   have one, then request the key. It's issued instantly, no approval
-   wait, no cost.
-3. Copy the key (a long string of letters/numbers).
+All from free sources: Yahoo Finance (via yfinance) for market data, and
+FRED (Federal Reserve's free API) for the Fed rate. Sent via Verizon's
+free email-to-SMS gateway. No Twilio, no fees.
 
-ALL SETUP (full list, including steps from before)
------------------------------------------------------
-1. Gmail App Password - see earlier version of this script for details
-   if you haven't already set this up.
-2. FRED API key - see above.
-3. Install dependencies:
-     pip install yfinance requests --break-system-packages
-4. Set environment variables:
+SETUP
+-----
+Same as before - see earlier comments/previous versions for full details
+on Gmail App Password + FRED API key. Environment variables needed:
      export GMAIL_ADDRESS="youraccount@gmail.com"
      export GMAIL_APP_PASSWORD="the16charapppassword"
      export PHONE_NUMBER="1234567890"
      export CARRIER_GATEWAY="vtext.com"
      export FRED_API_KEY="your_fred_api_key"
-5. Run manually to test:
-     python3 sp500_email_sms.py
 
-NOTE ON THE FED RATE NUMBER
------------------------------
-This uses FRED series "DFF" (Effective Federal Funds Rate), which is the
-actual daily rate depository institutions trade at - not the FOMC's
-official target *range* you often hear quoted in the news (e.g.
-"4.25%-4.50%"). DFF is a single number that typically sits within that
-target range. It only updates on business days and reflects the most
-recent day the Fed has published.
+Install: pip install yfinance requests --break-system-packages
+
+NOTE ON SECTORS
+---------------
+S&P 500 sectors are tracked here using the 11 "Select Sector SPDR" ETFs
+(the standard, widely-used proxy for each GICS sector - e.g. XLK for
+Technology, XLF for Financials, etc.). Each one's daily % change is used
+to rank sectors, since there's no free direct feed of "S&P sector index"
+values from Yahoo Finance.
+
+NOTE ON 10-YEAR YIELD
+----------------------
+Yahoo Finance's ^TNX quotes the 10-Year Treasury yield x10 (a historical
+quirk - so a displayed value of "42.5" means 4.25%). This script divides
+by 10 automatically before showing it.
+
+A message this size (6 data points) may occasionally exceed the
+traditional 160-character single-SMS limit - most carriers/phones handle
+this fine as an auto-split "long SMS," but it's worth knowing in case
+your phone shows it as two separate texts.
 """
 
 import os
@@ -49,7 +52,6 @@ import sys
 from datetime import datetime
 
 import requests
-
 
 CARRIER_GATEWAYS = {
     "verizon": "vtext.com",
@@ -64,36 +66,59 @@ CARRIER_GATEWAYS = {
     "visible": "vtext.com",
 }
 
+SECTOR_ETFS = {
+    "XLK": "Technology",
+    "XLF": "Financials",
+    "XLV": "Health Care",
+    "XLY": "Consumer Disc.",
+    "XLP": "Consumer Staples",
+    "XLE": "Energy",
+    "XLI": "Industrials",
+    "XLB": "Materials",
+    "XLU": "Utilities",
+    "XLRE": "Real Estate",
+    "XLC": "Comm. Services",
+}
 
-def get_sp500_line():
+
+def _pct_change(hist):
+    if hist.empty or len(hist) < 2:
+        raise RuntimeError("Not enough price history.")
+    latest = hist["Close"].iloc[-1]
+    prev = hist["Close"].iloc[-2]
+    change = latest - prev
+    pct = (change / prev) * 100
+    return latest, change, pct
+
+
+def get_index_line(ticker_symbol, label):
     import yfinance as yf
 
-    ticker = yf.Ticker("^GSPC")
-    hist = ticker.history(period="5d")
-
-    if hist.empty or len(hist) < 2:
-        raise RuntimeError("Could not retrieve enough S&P 500 price history.")
-
-    latest_close = hist["Close"].iloc[-1]
-    prev_close = hist["Close"].iloc[-2]
-    change = latest_close - prev_close
-    pct_change = (change / prev_close) * 100
-    date_str = hist.index[-1].strftime("%b %d, %Y")
+    hist = yf.Ticker(ticker_symbol).history(period="5d")
+    latest, change, pct = _pct_change(hist)
     arrow_word = "UP" if change >= 0 else "DOWN"
+    return f"{label}: {latest:,.2f} {arrow_word} {change:+,.2f} ({pct:+.2f}%)"
 
-    header = f"S&P 500 Update - {date_str}"
-    body = f"Close: {latest_close:,.2f}\n{arrow_word} {change:+,.2f} ({pct_change:+.2f}%)"
-    return header, body
+
+def get_treasury_yield_line():
+    import yfinance as yf
+
+    hist = yf.Ticker("^TNX").history(period="5d")
+    if hist.empty:
+        raise RuntimeError("Could not retrieve 10-year Treasury yield.")
+    latest_raw = hist["Close"].iloc[-1]
+    yield_pct = latest_raw / 10  # Yahoo quotes ^TNX as yield x10
+    return f"10-Yr Treasury Yield: {yield_pct:.2f}%"
 
 
 def get_fed_rate_line():
     api_key = os.environ.get("FRED_API_KEY")
     if not api_key:
-        return None  # skip gracefully if not configured
+        return None
 
     url = "https://api.stlouisfed.org/fred/series/observations"
     params = {
-        "series_id": "DFF",  # Effective Federal Funds Rate
+        "series_id": "DFF",
         "api_key": api_key,
         "file_type": "json",
         "sort_order": "desc",
@@ -101,28 +126,64 @@ def get_fed_rate_line():
     }
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
-    data = resp.json()
+    obs = resp.json()["observations"][0]
+    return f"Fed Funds Rate: {obs['value']}% (as of {obs['date']})"
 
-    obs = data["observations"][0]
-    rate = obs["value"]
-    obs_date = obs["date"]
 
-    return f"Fed Funds Rate: {rate}% (as of {obs_date})"
+def get_sector_lines():
+    import yfinance as yf
+
+    results = []
+    for etf, name in SECTOR_ETFS.items():
+        try:
+            hist = yf.Ticker(etf).history(period="5d")
+            _, _, pct = _pct_change(hist)
+            results.append((name, pct))
+        except Exception as e:
+            print(f"[warning] Could not fetch sector {name} ({etf}): {e}", file=sys.stderr)
+
+    if not results:
+        return None
+
+    results.sort(key=lambda x: x[1], reverse=True)
+    top_gainers = results[:3]
+    top_losers = results[-3:][::-1]  # worst first
+
+    gainer_str = ", ".join(f"{name} {pct:+.1f}%" for name, pct in top_gainers)
+    loser_str = ", ".join(f"{name} {pct:+.1f}%" for name, pct in top_losers)
+
+    return f"Top Sectors: {gainer_str}\nBottom Sectors: {loser_str}"
 
 
 def build_message():
-    sp500_header, sp500_body = get_sp500_line()
-    lines = [sp500_header, sp500_body]
+    lines = []
+
+    lines.append(get_index_line("^GSPC", "S&P 500"))
+    lines.append(get_index_line("^IXIC", "Nasdaq"))
+    lines.append(get_index_line("^DJI", "Dow"))
+
+    try:
+        lines.append(get_treasury_yield_line())
+    except Exception as e:
+        print(f"[warning] Could not fetch 10-yr yield: {e}", file=sys.stderr)
 
     try:
         fed_line = get_fed_rate_line()
         if fed_line:
             lines.append(fed_line)
     except Exception as e:
-        # Don't let a Fed data hiccup block the S&P 500 text from sending.
         print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
 
-    return "\n".join(lines)
+    try:
+        sector_lines = get_sector_lines()
+        if sector_lines:
+            lines.append(sector_lines)
+    except Exception as e:
+        print(f"[warning] Could not fetch sector data: {e}", file=sys.stderr)
+
+    date_str = datetime.now().strftime("%b %d, %Y")
+    header = f"Market Update - {date_str}"
+    return header + "\n" + "\n".join(lines)
 
 
 def send_email_sms(body: str):
