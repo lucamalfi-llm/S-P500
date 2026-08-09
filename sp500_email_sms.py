@@ -187,28 +187,21 @@ def build_messages():
     messages into multiple parts (it can silently drop the overflow)."""
     date_str = datetime.now().strftime("%b %d, %Y")
 
-    # --- Message 1: S&P 500 + sector performance ---
+    # --- Message 1: S&P 500 + Fed Funds Rate ---
     msg1_lines = [f"Market Update 1/2 - {date_str}"]
     msg1_lines.append(get_index_line("^GSPC", "S&P 500"))
 
     try:
-        sector_lines = get_sector_lines()
-        if sector_lines:
-            msg1_lines.append(sector_lines)
+        fed_line = get_fed_rate_line()
+        if fed_line:
+            msg1_lines.append(fed_line)
     except Exception as e:
-        print(f"[warning] Could not fetch sector data: {e}", file=sys.stderr)
+        print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
 
     message1 = "\n".join(msg1_lines)
 
-    # --- Message 2: Fed rate + mortgage rates ---
+    # --- Message 2: Mortgage rates ---
     msg2_lines = [f"Market Update 2/2 - {date_str}"]
-
-    try:
-        fed_line = get_fed_rate_line()
-        if fed_line:
-            msg2_lines.append(fed_line)
-    except Exception as e:
-        print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
 
     try:
         mortgage_lines = get_mortgage_rate_lines()
