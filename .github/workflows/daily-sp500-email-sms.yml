@@ -2,10 +2,8 @@ name: Daily S&P 500 Text Update (Free)
 
 on:
   schedule:
-    # Cron is in UTC. 21:30 UTC = 4:30pm US Eastern during Daylight Time
-    # (EDT), 5:30pm during Standard Time (EST). Runs Mon-Fri only.
     - cron: "30 21 * * 1-5"
-  workflow_dispatch: {}   # lets you click "Run workflow" manually to test
+  workflow_dispatch: {}
 
 jobs:
   send-update:
@@ -20,7 +18,7 @@ jobs:
           python-version: "3.11"
 
       - name: Install dependencies
-        run: pip install yfinance
+        run: pip install yfinance requests
 
       - name: Run S&P 500 text script
         env:
@@ -28,4 +26,5 @@ jobs:
           GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
           PHONE_NUMBER: ${{ secrets.PHONE_NUMBER }}
           CARRIER_GATEWAY: ${{ secrets.CARRIER_GATEWAY }}
+          FRED_API_KEY: ${{ secrets.FRED_API_KEY }}
         run: python3 sp500_email_sms.py
