@@ -127,7 +127,8 @@ def get_fed_rate_line():
     resp = requests.get(url, params=params, timeout=15)
     resp.raise_for_status()
     obs = resp.json()["observations"][0]
-    return f"Fed Funds Rate: {obs['value']}% (as of {obs['date']})"
+    rate = float(obs["value"])
+    return f"Fed Funds Rate: {rate:.2f}% (as of {obs['date']})"
 
 
 def get_mortgage_rate_lines():
@@ -151,7 +152,8 @@ def get_mortgage_rate_lines():
         resp = requests.get(url, params=params, timeout=15)
         resp.raise_for_status()
         obs = resp.json()["observations"][0]
-        lines.append(f"{label}: {obs['value']}% (as of {obs['date']})")
+        rate = float(obs["value"])
+        lines.append(f"{label}: {rate:.2f}% (as of {obs['date']})")
 
     return lines
 
