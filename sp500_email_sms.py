@@ -221,20 +221,22 @@ def send_email_sms(body: str):
 
     gmail_address = os.environ["GMAIL_ADDRESS"]
     gmail_app_password = os.environ["GMAIL_APP_PASSWORD"]
-    phone_number = os.environ["PHONE_NUMBER"]
     carrier_gateway = os.environ["CARRIER_GATEWAY"]
 
-    to_address = f"{phone_number}@{carrier_gateway}"
+    # Supports one or more phone numbers, comma-separated, e.g.
+    # PHONE_NUMBER="5551234567,5559876543"
+    phone_numbers = [p.strip() for p in os.environ["PHONE_NUMBER"].split(",") if p.strip()]
+    to_addresses = [f"{number}@{carrier_gateway}" for number in phone_numbers]
 
     msg = MIMEText(body)
     msg["Subject"] = ""
     msg["From"] = gmail_address
-    msg["To"] = to_address
+    msg["To"] = ", ".join(to_addresses)
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(gmail_address, gmail_app_password)
-        server.sendmail(gmail_address, [to_address], msg.as_string())
+        server.sendmail(gmail_address, to_addresses, msg.as_string())
 
 
 def main():
