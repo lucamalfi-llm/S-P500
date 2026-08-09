@@ -130,6 +130,32 @@ def get_fed_rate_line():
     return f"Fed Funds Rate: {obs['value']}% (as of {obs['date']})"
 
 
+def get_mortgage_rate_lines():
+    """Returns average 30-year and 15-year fixed mortgage rates from
+    Freddie Mac's survey via FRED. These update weekly (Thursdays), so
+    the same value may repeat for several days between updates."""
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        return None
+
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    lines = []
+    for series_id, label in [("MORTGAGE30US", "30-Yr Mortgage"), ("MORTGAGE15US", "15-Yr Mortgage")]:
+        params = {
+            "series_id": series_id,
+            "api_key": api_key,
+            "file_type": "json",
+            "sort_order": "desc",
+            "limit": 1,
+        }
+        resp = requests.get(url, params=params, timeout=15)
+        resp.raise_for_status()
+        obs = resp.json()["observations"][0]
+        lines.append(f"{label}: {obs['value']}% (as of {obs['date']})")
+
+    return lines
+
+
 def get_sector_lines():
     import yfinance as yf
 
@@ -161,20 +187,21 @@ def build_messages():
     messages into multiple parts (it can silently drop the overflow)."""
     date_str = datetime.now().strftime("%b %d, %Y")
 
-    # --- Message 1: indices ---
+    # --- Message 1: S&P 500 + sector performance ---
     msg1_lines = [f"Market Update 1/2 - {date_str}"]
     msg1_lines.append(get_index_line("^GSPC", "S&P 500"))
-    msg1_lines.append(get_index_line("^IXIC", "Nasdaq"))
-    msg1_lines.append(get_index_line("^DJI", "Dow"))
-    message1 = "\n".join(msg1_lines)
-
-    # --- Message 2: rates + sectors ---
-    msg2_lines = [f"Market Update 2/2 - {date_str}"]
 
     try:
-        msg2_lines.append(get_treasury_yield_line())
+        sector_lines = get_sector_lines()
+        if sector_lines:
+            msg1_lines.append(sector_lines)
     except Exception as e:
-        print(f"[warning] Could not fetch 10-yr yield: {e}", file=sys.stderr)
+        print(f"[warning] Could not fetch sector data: {e}", file=sys.stderr)
+
+    message1 = "\n".join(msg1_lines)
+
+    # --- Message 2: Fed rate + mortgage rates ---
+    msg2_lines = [f"Market Update 2/2 - {date_str}"]
 
     try:
         fed_line = get_fed_rate_line()
@@ -184,11 +211,11 @@ def build_messages():
         print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
 
     try:
-        sector_lines = get_sector_lines()
-        if sector_lines:
-            msg2_lines.append(sector_lines)
+        mortgage_lines = get_mortgage_rate_lines()
+        if mortgage_lines:
+            msg2_lines.extend(mortgage_lines)
     except Exception as e:
-        print(f"[warning] Could not fetch sector data: {e}", file=sys.stderr)
+        print(f"[warning] Could not fetch mortgage rates: {e}", file=sys.stderr)
 
     message2 = "\n".join(msg2_lines)
 
