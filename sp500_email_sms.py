@@ -228,17 +228,21 @@ def send_email_sms(body: str):
     # Supports one or more phone numbers, comma-separated, e.g.
     # PHONE_NUMBER="5551234567,5559876543"
     phone_numbers = [p.strip() for p in os.environ["PHONE_NUMBER"].split(",") if p.strip()]
-    to_addresses = [f"{number}@{carrier_gateway}" for number in phone_numbers]
-
-    msg = MIMEText(body)
-    msg["Subject"] = ""
-    msg["From"] = gmail_address
-    msg["To"] = ", ".join(to_addresses)
 
     with smtplib.SMTP("smtp.gmail.com", 587) as server:
         server.starttls()
         server.login(gmail_address, gmail_app_password)
-        server.sendmail(gmail_address, to_addresses, msg.as_string())
+
+        # Send one separate email per recipient - some carrier gateways
+        # silently drop messages that have multiple recipients on a
+        # single email, so this is safer than one email to both.
+        for number in phone_numbers:
+            to_address = f"{number}@{carrier_gateway}"
+            msg = MIMEText(body)
+            msg["Subject"] = ""
+            msg["From"] = gmail_address
+            msg["To"] = to_address
+            server.sendmail(gmail_address, [to_address], msg.as_string())
 
 
 def main():
