@@ -1,65 +1,55 @@
 """
-Daily S&P 500 text updater - FREE VERSION (email-to-SMS gateway, no Twilio).
+Daily S&P 500 + Fed Rate text updater - FREE VERSION (email-to-SMS gateway).
 
 WHAT THIS DOES
 --------------
-Fetches the latest S&P 500 (^GSPC) price + daily change from Yahoo Finance,
-then sends it as a text message by emailing Verizon's email-to-SMS gateway
-(number@vtext.com). No Twilio account, no fees, no approval process.
+Fetches:
+  1. The latest S&P 500 (^GSPC) price + daily change, from Yahoo Finance.
+  2. The latest Effective Federal Funds Rate, from FRED (Federal Reserve
+     Economic Data - the Fed's own free public database).
+Then sends both as a single text message via Verizon's email-to-SMS
+gateway. No Twilio, no fees.
 
-HOW IT WORKS
-------------
-Verizon (and other US carriers) automatically convert an email sent to
-yourphonenumber@vtext.com into a text message on that phone. This script
-just sends a plain email using a free Gmail account.
+NEW SETUP STEP: FRED API KEY (free, instant)
+----------------------------------------------
+1. Go to https://fred.stlouisfed.org/docs/api/api_key.html
+2. Click "Request API Key" - sign up for a free FRED account if you don't
+   have one, then request the key. It's issued instantly, no approval
+   wait, no cost.
+3. Copy the key (a long string of letters/numbers).
 
-SETUP (one-time)
------------------
-1. Use an existing Gmail account, or create a new free one just for this.
-
-2. Create a Gmail "App Password" (required - your normal Gmail password
-   won't work for this):
-   - Go to https://myaccount.google.com/apppasswords
-   - You may first need to enable 2-Step Verification on the account if
-     it isn't already on (Google requires this before app passwords can
-     be created).
-   - Create a new app password, name it something like "sp500-script".
-   - Copy the 16-character password it gives you (spaces don't matter).
-
-3. Install dependencies (only yfinance is needed - email sending uses
-   Python's built-in smtplib, no extra package required):
-     pip install yfinance --break-system-packages
-
-4. Set these environment variables:
+ALL SETUP (full list, including steps from before)
+-----------------------------------------------------
+1. Gmail App Password - see earlier version of this script for details
+   if you haven't already set this up.
+2. FRED API key - see above.
+3. Install dependencies:
+     pip install yfinance requests --break-system-packages
+4. Set environment variables:
      export GMAIL_ADDRESS="youraccount@gmail.com"
      export GMAIL_APP_PASSWORD="the16charapppassword"
-     export PHONE_NUMBER="1234567890"        # your 10-digit number, no dashes
-     export CARRIER_GATEWAY="vtext.com"      # Verizon. See CARRIER_GATEWAYS
-                                              # below for other carriers.
-
-5. Run it manually to test:
+     export PHONE_NUMBER="1234567890"
+     export CARRIER_GATEWAY="vtext.com"
+     export FRED_API_KEY="your_fred_api_key"
+5. Run manually to test:
      python3 sp500_email_sms.py
 
-6. Automate it daily - see the accompanying GitHub Actions workflow
-   (daily-sp500-email-sms.yml) to run this in the cloud for free.
-
-NOTES / HONEST CAVEATS
------------------------
-- Delivery isn't guaranteed to be instant - carriers sometimes delay
-  these by a few minutes, and in rare cases a message may not arrive at
-  all. There's no delivery confirmation like Twilio provides.
-- If you ever switch carriers, update CARRIER_GATEWAY to match (see the
-  dict below for the most common ones).
-- Some carriers occasionally rate-limit or filter automated messages
-  through this gateway if volume looks unusual - one message a day is
-  very unlikely to trigger that.
+NOTE ON THE FED RATE NUMBER
+-----------------------------
+This uses FRED series "DFF" (Effective Federal Funds Rate), which is the
+actual daily rate depository institutions trade at - not the FOMC's
+official target *range* you often hear quoted in the news (e.g.
+"4.25%-4.50%"). DFF is a single number that typically sits within that
+target range. It only updates on business days and reflects the most
+recent day the Fed has published.
 """
 
 import os
-import smtplib
 import sys
 from datetime import datetime
-from email.mime.text import MIMEText
+
+import requests
+
 
 CARRIER_GATEWAYS = {
     "verizon": "vtext.com",
@@ -71,11 +61,11 @@ CARRIER_GATEWAYS = {
     "metropcs": "mymetropcs.com",
     "uscellular": "email.uscc.net",
     "googlefi": "msg.fi.google.com",
-    "visible": "vtext.com",  # Visible runs on Verizon's network
+    "visible": "vtext.com",
 }
 
 
-def get_sp500_summary():
+def get_sp500_line():
     import yfinance as yf
 
     ticker = yf.Ticker("^GSPC")
@@ -89,18 +79,56 @@ def get_sp500_summary():
     change = latest_close - prev_close
     pct_change = (change / prev_close) * 100
     date_str = hist.index[-1].strftime("%b %d, %Y")
-
     arrow_word = "UP" if change >= 0 else "DOWN"
 
-    message = (
-        f"S&P 500 Update - {date_str}\n"
-        f"Close: {latest_close:,.2f}\n"
-        f"{arrow_word} {change:+,.2f} ({pct_change:+.2f}%)"
-    )
-    return message
+    header = f"S&P 500 Update - {date_str}"
+    body = f"Close: {latest_close:,.2f}\n{arrow_word} {change:+,.2f} ({pct_change:+.2f}%)"
+    return header, body
+
+
+def get_fed_rate_line():
+    api_key = os.environ.get("FRED_API_KEY")
+    if not api_key:
+        return None  # skip gracefully if not configured
+
+    url = "https://api.stlouisfed.org/fred/series/observations"
+    params = {
+        "series_id": "DFF",  # Effective Federal Funds Rate
+        "api_key": api_key,
+        "file_type": "json",
+        "sort_order": "desc",
+        "limit": 1,
+    }
+    resp = requests.get(url, params=params, timeout=15)
+    resp.raise_for_status()
+    data = resp.json()
+
+    obs = data["observations"][0]
+    rate = obs["value"]
+    obs_date = obs["date"]
+
+    return f"Fed Funds Rate: {rate}% (as of {obs_date})"
+
+
+def build_message():
+    sp500_header, sp500_body = get_sp500_line()
+    lines = [sp500_header, sp500_body]
+
+    try:
+        fed_line = get_fed_rate_line()
+        if fed_line:
+            lines.append(fed_line)
+    except Exception as e:
+        # Don't let a Fed data hiccup block the S&P 500 text from sending.
+        print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
+
+    return "\n".join(lines)
 
 
 def send_email_sms(body: str):
+    import smtplib
+    from email.mime.text import MIMEText
+
     gmail_address = os.environ["GMAIL_ADDRESS"]
     gmail_app_password = os.environ["GMAIL_APP_PASSWORD"]
     phone_number = os.environ["PHONE_NUMBER"]
@@ -108,8 +136,6 @@ def send_email_sms(body: str):
 
     to_address = f"{phone_number}@{carrier_gateway}"
 
-    # Keep subject empty - most carrier gateways prepend the subject to
-    # the text, which you don't want for a clean message.
     msg = MIMEText(body)
     msg["Subject"] = ""
     msg["From"] = gmail_address
@@ -123,22 +149,21 @@ def send_email_sms(body: str):
 
 def main():
     try:
-        summary = get_sp500_summary()
+        message = build_message()
     except Exception as e:
-        print(f"[{datetime.now()}] Failed to fetch S&P 500 data: {e}", file=sys.stderr)
+        print(f"[{datetime.now()}] Failed to build message: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print("Message to send:\n" + summary)
+    print("Message to send:\n" + message)
 
     required_vars = ["GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "PHONE_NUMBER", "CARRIER_GATEWAY"]
     missing = [v for v in required_vars if not os.environ.get(v)]
     if missing:
         print(f"\n[Not sent] Missing environment variables: {', '.join(missing)}")
-        print("Set them and re-run to actually send the text.")
         return
 
     try:
-        send_email_sms(summary)
+        send_email_sms(message)
         print("\nSent!")
     except Exception as e:
         print(f"[{datetime.now()}] Failed to send text: {e}", file=sys.stderr)
