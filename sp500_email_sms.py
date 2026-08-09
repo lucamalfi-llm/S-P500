@@ -155,35 +155,44 @@ def get_sector_lines():
     return f"Top Sectors: {gainer_str}\nBottom Sectors: {loser_str}"
 
 
-def build_message():
-    lines = []
+def build_messages():
+    """Returns a list of message strings - sent as separate texts, since
+    Verizon's email-to-SMS gateway doesn't reliably auto-split long
+    messages into multiple parts (it can silently drop the overflow)."""
+    date_str = datetime.now().strftime("%b %d, %Y")
 
-    lines.append(get_index_line("^GSPC", "S&P 500"))
-    lines.append(get_index_line("^IXIC", "Nasdaq"))
-    lines.append(get_index_line("^DJI", "Dow"))
+    # --- Message 1: indices ---
+    msg1_lines = [f"Market Update 1/2 - {date_str}"]
+    msg1_lines.append(get_index_line("^GSPC", "S&P 500"))
+    msg1_lines.append(get_index_line("^IXIC", "Nasdaq"))
+    msg1_lines.append(get_index_line("^DJI", "Dow"))
+    message1 = "\n".join(msg1_lines)
+
+    # --- Message 2: rates + sectors ---
+    msg2_lines = [f"Market Update 2/2 - {date_str}"]
 
     try:
-        lines.append(get_treasury_yield_line())
+        msg2_lines.append(get_treasury_yield_line())
     except Exception as e:
         print(f"[warning] Could not fetch 10-yr yield: {e}", file=sys.stderr)
 
     try:
         fed_line = get_fed_rate_line()
         if fed_line:
-            lines.append(fed_line)
+            msg2_lines.append(fed_line)
     except Exception as e:
         print(f"[warning] Could not fetch Fed rate: {e}", file=sys.stderr)
 
     try:
         sector_lines = get_sector_lines()
         if sector_lines:
-            lines.append(sector_lines)
+            msg2_lines.append(sector_lines)
     except Exception as e:
         print(f"[warning] Could not fetch sector data: {e}", file=sys.stderr)
 
-    date_str = datetime.now().strftime("%b %d, %Y")
-    header = f"Market Update - {date_str}"
-    return header + "\n" + "\n".join(lines)
+    message2 = "\n".join(msg2_lines)
+
+    return [message1, message2]
 
 
 def send_email_sms(body: str):
@@ -209,13 +218,16 @@ def send_email_sms(body: str):
 
 
 def main():
+    import time
+
     try:
-        message = build_message()
+        messages = build_messages()
     except Exception as e:
-        print(f"[{datetime.now()}] Failed to build message: {e}", file=sys.stderr)
+        print(f"[{datetime.now()}] Failed to build messages: {e}", file=sys.stderr)
         sys.exit(1)
 
-    print("Message to send:\n" + message)
+    for i, message in enumerate(messages, start=1):
+        print(f"\nMessage {i} to send:\n{message}")
 
     required_vars = ["GMAIL_ADDRESS", "GMAIL_APP_PASSWORD", "PHONE_NUMBER", "CARRIER_GATEWAY"]
     missing = [v for v in required_vars if not os.environ.get(v)]
@@ -223,12 +235,14 @@ def main():
         print(f"\n[Not sent] Missing environment variables: {', '.join(missing)}")
         return
 
-    try:
-        send_email_sms(message)
-        print("\nSent!")
-    except Exception as e:
-        print(f"[{datetime.now()}] Failed to send text: {e}", file=sys.stderr)
-        sys.exit(1)
+    for i, message in enumerate(messages, start=1):
+        try:
+            send_email_sms(message)
+            print(f"\nSent message {i}!")
+        except Exception as e:
+            print(f"[{datetime.now()}] Failed to send message {i}: {e}", file=sys.stderr)
+        if i < len(messages):
+            time.sleep(10)  # small gap so carrier doesn't merge/drop them
 
 
 if __name__ == "__main__":
